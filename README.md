@@ -1,21 +1,40 @@
 # portal-cli
 
-A CLI tool to set up portal projects for SDK translation. This tool creates a structured project directory with the upstream repository and a target language port directory.
+A CLI tool for porting code repositories to different programming languages. It helps you translate and maintain codebases across languages (Python, Rust, Swift, Go, etc.) by creating a structured project that keeps the original source code alongside your translated port, tracks version changes, and monitors upstream updates.
 
 ## Installation
 
 ### Using Homebrew
 
-#### Option 1: Local Installation (For Testing)
-For local development and testing, use the install script:
+Install `portal-cli` using the Homebrew tap:
+
 ```bash
-./install-local.sh
+# Tap the repository and install
+brew tap yannisdecl/portal
+brew install portal-cli
 ```
 
-This will copy the script to Homebrew's bin directory.
+**If you're prompted for a GitHub username/password**, use the explicit HTTPS URL:
 
-#### Option 2: Install via Homebrew Tap
-The tap has been created at: `yannisdecl/portal`
+```bash
+brew tap yannisdecl/portal https://github.com/YannisDC/homebrew-portal.git
+brew install portal-cli
+```
+
+**Optional:** Create a symlink for convenience:
+```bash
+ln -sf /opt/homebrew/bin/portal-cli /opt/homebrew/bin/portal
+```
+
+**Install PyYAML** for config-based commands (required for `--port`, `list`, `tags`, `version`):
+```bash
+# On modern macOS with externally-managed Python, use:
+pip3 install --break-system-packages pyyaml
+# Or use --user flag:
+pip3 install --user pyyaml
+```
+
+**For Maintainers:** To update the formula after creating a new release:
 
 ```bash
 # 1. Create new tarball
@@ -26,18 +45,8 @@ tar czf portal-cli.tar.gz portal-cli
 SHA256=$(shasum -a 256 portal-cli.tar.gz | awk '{print $1}')
 sed -i '' "s/sha256 \".*\"/sha256 \"$SHA256\"/" /opt/homebrew/Library/Taps/yannisdecl/homebrew-portal/Formula/portal-cli.rb
 
-# 3. Uninstall and reinstall
-brew uninstall portal-cli
-brew install yannisdecl/portal/portal-cli
-
-# 4. Create symlink
-ln -sf /opt/homebrew/bin/portal-cli /opt/homebrew/bin/portal
-
-# Install PyYAML for config-based commands (required for --port, list, tags, version)
-# On modern macOS with externally-managed Python, use:
-pip3 install --break-system-packages pyyaml
-# Or use --user flag:
-pip3 install --user pyyaml
+# 3. Update the version and URL in the formula, then commit and push to GitHub
+# 4. Users can update with: brew upgrade portal-cli
 ```
 
 **Note:** For config-based commands (`--port`, `list`, `tags`, `version`), you need to install PyYAML separately:
