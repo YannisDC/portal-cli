@@ -3,10 +3,10 @@
 # Or create a tap: brew tap yourusername/portal && brew install portal-cli
 class PortalCli < Formula
   desc "CLI tool to set up portal projects for SDK translation"
-  homepage "https://github.com/yourusername/portal"
-  url "https://github.com/yourusername/portal/archive/refs/heads/main.zip"
+  homepage "https://github.com/YannisDC/portal-cli"
+  url "https://github.com/YannisDC/portal-cli/archive/refs/heads/main.zip"
   version "0.1.0"
-  sha256 "" # Update this after creating a release: shasum -a 256 <archive>
+  sha256 "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5" # Update this after creating a release: shasum -a 256 <archive>
   
   depends_on "python@3"
 

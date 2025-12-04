@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-portal: A tool to set up portal projects for SDK translation
+portal: A tool to set up portal projects for repository translation
 """
 
 import argparse
@@ -8,7 +8,14 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
 
 
 def normalize_repo_url(repo_url):
@@ -69,7 +76,192 @@ def clone_repo(repo_url, target_dir, version=None):
     print(f"Successfully cloned repository to {target_dir}")
 
 
-def create_portal_project(upstream_repo, target_language, version=None, project_name=None):
+def create_cursorrules(project_dir):
+    """Create .cursorrules file with port maintenance instructions"""
+    cursorrules_content = """# Portal Project Maintenance Rules
+
+When keeping the ports up to date:
+1. Check the portal.yaml file to see which versions the source project and the ports are on
+2. Check the diffs folder to see what changed between versions
+
+## Version Updates
+
+- Update the version of the port in the portal.yaml file when the port upgrade is done
+- Use `portal version --port <port-name> --version <version>` to update versions
+
+## Initial Translation
+
+If no code is present in the port folder, translate the source repo from the beginning. Do this faithfully by:
+- Keeping comments and tests in place
+- Ensuring the project runs
+- Making sure tests succeed
+- Ensuring the project can be deployed on the designated platform
+
+## Workflow
+
+1. Check `portal.yaml` for current versions:
+   - Upstream version (in `upstreams` section)
+   - Port version (in `ports` section)
+
+2. Review diffs in `diffs/` folder:
+   - Files: `diff-{upstream}-{from}-to-{to}.patch`
+   - These show what changed between versions
+
+3. Apply changes to the port:
+   - Translate new features
+   - Update existing code to match upstream changes
+   - Maintain test coverage
+   - Keep comments and documentation
+
+4. Update version in portal.yaml after completing the port update
+"""
+    
+    cursorrules_path = project_dir / ".cursorrules"
+    cursorrules_path.write_text(cursorrules_content)
+    print(f"Created .cursorrules file: {cursorrules_path}")
+
+
+def create_portal_config(project_dir, upstreams_config, ports_config):
+    """Create portal.yaml configuration file"""
+    if not HAS_YAML:
+        # Fallback: create a simple text-based config
+        config_lines = ["upstreams:"]
+        for upstream in upstreams_config:
+            config_lines.append(f"  - name: {upstream['name']}")
+            config_lines.append(f"    repo: {upstream['repo']}")
+            config_lines.append(f"    branch: {upstream.get('branch', 'main')}")
+            if upstream.get('version'):
+                config_lines.append(f"    version: {upstream['version']}")
+        
+        config_lines.append("\nports:")
+        for port in ports_config:
+            port_path = port.get('path', f"./{port['lang']}-port")
+            config_lines.append(f"  - name: {port['name']}")
+            config_lines.append(f"    repo: {port['repo']}")
+            config_lines.append(f"    path: {port_path}")
+            config_lines.append(f"    lang: {port['lang']}")
+            config_lines.append(f"    origin: {port['origin']}")
+            if port.get('version'):
+                config_lines.append(f"    version: {port['version']}")
+        
+        config_lines.append("\n# Portal Management:")
+        config_lines.append("# 1. Open a portal (initial port from a version tag):")
+        config_lines.append("#    portal open --port <port-name> --version 0.5.0")
+        config_lines.append("#")
+        config_lines.append("# 2. Update version manually (for testing):")
+        config_lines.append("#    portal version --port <port-name> --version 0.6.0")
+        config_lines.append("#")
+        config_lines.append("# 3. List opened portals:")
+        config_lines.append("#    portal list")
+        config_lines.append("#")
+        config_lines.append("# 4. List available version tags:")
+        config_lines.append("#    portal tags --upstream <upstream-name>")
+        config_lines.append("#")
+        config_lines.append("# 5. Watch for upstream changes:")
+        config_lines.append("#    portal watch --upstream <upstream-name>")
+        config_lines.append("#    portal watch --upstream <upstream-name> --once  # Check once")
+        config_lines.append("#    portal watch --upstream <upstream-name> --detailed  # Show detailed diffs")
+        
+        config_content = "\n".join(config_lines)
+    else:
+        # Use YAML for proper formatting
+        config = {
+            'upstreams': upstreams_config,
+            'ports': ports_config
+        }
+        config_content = yaml.dump(config, default_flow_style=False, sort_keys=False)
+        config_content += "\n# Portal Management:\n"
+        config_content += "# 1. Open a portal (initial port from a version tag):\n"
+        config_content += "#    portal open --port <port-name> --version 0.5.0\n"
+        config_content += "#\n"
+        config_content += "# 2. Update version manually (for testing):\n"
+        config_content += "#    portal version --port <port-name> --version 0.6.0\n"
+        config_content += "#\n"
+        config_content += "# 3. List opened portals:\n"
+        config_content += "#    portal list\n"
+        config_content += "#\n"
+        config_content += "# 4. List available version tags:\n"
+        config_content += "#    portal tags --upstream <upstream-name>\n"
+        config_content += "#\n"
+        config_content += "# 5. Watch for upstream changes:\n"
+        config_content += "#    portal watch --upstream <upstream-name>\n"
+        config_content += "#    portal watch --upstream <upstream-name> --once  # Check once\n"
+        config_content += "#    portal watch --upstream <upstream-name> --detailed  # Show detailed diffs\n"
+    
+    config_path = project_dir / "portal.yaml"
+    config_path.write_text(config_content)
+    print(f"Created configuration file: {config_path}")
+
+
+def load_portal_config(project_dir=None):
+    """Load portal.yaml configuration file"""
+    if not HAS_YAML:
+        print("Error: PyYAML is required for config-based commands. Install it with: pip install pyyaml")
+        sys.exit(1)
+    
+    if project_dir is None:
+        project_dir = Path.cwd()
+    else:
+        project_dir = Path(project_dir)
+    
+    config_path = project_dir / "portal.yaml"
+    if not config_path.exists():
+        return None
+    
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+
+def save_portal_config(config, project_dir=None):
+    """Save portal.yaml configuration file"""
+    if not HAS_YAML:
+        print("Error: PyYAML is required for config-based commands. Install it with: pip install pyyaml")
+        sys.exit(1)
+    
+    if project_dir is None:
+        project_dir = Path.cwd()
+    else:
+        project_dir = Path(project_dir)
+    
+    config_path = project_dir / "portal.yaml"
+    
+    # Read existing file to preserve comments
+    existing_content = ""
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            existing_content = f.read()
+    
+    # Write updated config
+    config_content = yaml.dump(config, default_flow_style=False, sort_keys=False)
+    
+    # Preserve comments if they exist
+    if "# Portal Management:" in existing_content:
+        comment_section = existing_content.split("# Portal Management:")[1]
+        config_content += "\n# Portal Management:" + comment_section
+    else:
+        # Add default comments
+        config_content += "\n# Portal Management:\n"
+        config_content += "# 1. Open a portal (initial port from a version tag):\n"
+        config_content += "#    portal open --port <port-name> --version 0.5.0\n"
+        config_content += "#\n"
+        config_content += "# 2. Update version manually (for testing):\n"
+        config_content += "#    portal version --port <port-name> --version 0.6.0\n"
+        config_content += "#\n"
+        config_content += "# 3. List opened portals:\n"
+        config_content += "#    portal list\n"
+        config_content += "#\n"
+        config_content += "# 4. List available version tags:\n"
+        config_content += "#    portal tags --upstream <upstream-name>\n"
+        config_content += "#\n"
+        config_content += "# 5. Watch for upstream changes:\n"
+        config_content += "#    portal watch --upstream <upstream-name>\n"
+        config_content += "#    portal watch --upstream <upstream-name> --once  # Check once\n"
+        config_content += "#    portal watch --upstream <upstream-name> --detailed  # Show detailed diffs\n"
+    
+    config_path.write_text(config_content)
+
+
+def create_portal_project(upstream_repo, target_language, version=None, project_name=None, create_config=True):
     """Create a new portal project structure"""
     # Normalize the repository URL
     normalized_repo = normalize_repo_url(upstream_repo)
@@ -113,6 +305,34 @@ This directory contains the translated files for the {target_language} port of {
 """
     (port_dir / "README.md").write_text(readme_content)
     
+    # Create portal.yaml config file
+    if create_config:
+        # Extract repo owner and name for config
+        repo_parts = normalized_repo.rstrip('/').replace('.git', '').split('/')
+        repo_owner = repo_parts[-2] if len(repo_parts) >= 2 else "owner"
+        repo_name_only = repo_parts[-1] if repo_parts else "foo"
+        
+        upstream_config = [{
+            'name': f'{repo_name_only}',
+            'repo': normalized_repo.replace('https://', '').replace('.git', ''),
+            'branch': version or 'main',
+            'version': version or 'main'  # Track current version
+        }]
+        
+        port_config = [{
+            'name': f'{target_language}-port',
+            'repo': f'github.com/{repo_owner}/{target_language}-port',
+            'path': f'./{target_language}-port',
+            'lang': target_language,
+            'origin': f'{repo_name_only}',
+            'version': version or None  # Track port version
+        }]
+        
+        create_portal_config(project_dir, upstream_config, port_config)
+    
+    # Create .cursorrules file
+    create_cursorrules(project_dir)
+    
     print(f"\n✅ Portal project created successfully!")
     print(f"   Project directory: {project_dir.absolute()}")
     print(f"   Upstream repo: {upstream_dir}")
@@ -121,28 +341,728 @@ This directory contains the translated files for the {target_language} port of {
         print(f"   Version: {version}")
 
 
+def get_port_by_name(config, port_name):
+    """Get port configuration by name"""
+    if not config or 'ports' not in config:
+        return None
+    
+    for port in config['ports']:
+        if port.get('name') == port_name:
+            return port
+    return None
+
+
+def get_upstream_by_name(config, upstream_name):
+    """Get upstream configuration by name"""
+    if not config or 'upstreams' not in config:
+        return None
+    
+    for upstream in config['upstreams']:
+        if upstream.get('name') == upstream_name:
+            return upstream
+    return None
+
+
 def cmd_open(args):
     """Handle the 'open' subcommand"""
-    if not args.upstream:
-        print("Error: --upstream is required")
+    # Check if using --port (config-based), --lang only (add port to existing upstream), or --upstream (direct)
+    if args.port:
+        # Load config from current directory
+        config = load_portal_config()
+        if not config:
+            print("Error: portal.yaml not found. Run 'portal open' with --upstream and --lang first.")
+            sys.exit(1)
+        
+        port_config = get_port_by_name(config, args.port)
+        if not port_config:
+            print(f"Error: Port '{args.port}' not found in portal.yaml")
+            sys.exit(1)
+        
+        origin_name = port_config.get('origin')
+        upstream_config = get_upstream_by_name(config, origin_name)
+        if not upstream_config:
+            print(f"Error: Upstream '{origin_name}' not found in portal.yaml")
+            sys.exit(1)
+        
+        # Use config values
+        upstream_repo = upstream_config['repo']
+        target_language = port_config['lang']
+        version = args.version or upstream_config.get('branch', 'main')
+        
+        # Get project directory (assume current directory or parent)
+        project_dir = Path.cwd()
+        if not (project_dir / "portal.yaml").exists():
+            # Try parent directory
+            project_dir = project_dir.parent
+            if not (project_dir / "portal.yaml").exists():
+                print("Error: portal.yaml not found in current or parent directory")
+                sys.exit(1)
+        
+        # Clone/update upstream
+        upstream_dir = project_dir / "upstream"
+        if not upstream_dir.exists():
+            clone_repo(normalize_repo_url(upstream_config['repo']), str(upstream_dir), version)
+        else:
+            # Update existing upstream
+            print(f"Updating upstream to version {version}...")
+            subprocess.run(["git", "-C", str(upstream_dir), "fetch"], check=False)
+            checkout_result = subprocess.run(
+                ["git", "-C", str(upstream_dir), "checkout", version],
+                capture_output=True,
+                text=True
+            )
+            if checkout_result.returncode != 0:
+                print(f"Warning: Could not checkout version {version}")
+            else:
+                print(f"Successfully checked out version {version}")
+        
+        # Create/update port directory
+        port_path = port_config.get('path', f"./{target_language}-port")
+        port_dir = project_dir / port_path.lstrip('./')
+        port_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Port directory ready: {port_dir}")
+        
+        # Update versions in config
+        upstream_config['version'] = version
+        port_config['version'] = version
+        save_portal_config(config, project_dir)
+        
+        # Create or update .cursorrules file if it doesn't exist
+        cursorrules_path = project_dir / ".cursorrules"
+        if not cursorrules_path.exists():
+            create_cursorrules(project_dir)
+        
+        print(f"\n✅ Portal opened successfully!")
+        print(f"   Port: {args.port}")
+        print(f"   Origin: {origin_name}")
+        print(f"   Version: {version}")
+        print(f"   Port directory: {port_dir}")
+        
+    elif args.lang and not args.upstream:
+        # Add new port to existing upstream in YAML
+        config = load_portal_config()
+        if not config:
+            print("Error: portal.yaml not found. Use --upstream and --lang to create a new portal project.")
+            sys.exit(1)
+        
+        upstreams = config.get('upstreams', [])
+        if len(upstreams) == 0:
+            print("Error: No upstreams found in portal.yaml. Use --upstream and --lang to create a new portal project.")
+            sys.exit(1)
+        elif len(upstreams) == 1:
+            # Use the single upstream
+            upstream_config = upstreams[0]
+            upstream_name = upstream_config['name']
+        else:
+            # Multiple upstreams, need to specify
+            print("Error: Multiple upstreams found in portal.yaml. Please specify with --upstream:")
+            for upstream in upstreams:
+                print(f"  - {upstream['name']}")
+            sys.exit(1)
+        
+        # Get project directory
+        project_dir = Path.cwd()
+        if not (project_dir / "portal.yaml").exists():
+            project_dir = project_dir.parent
+            if not (project_dir / "portal.yaml").exists():
+                print("Error: portal.yaml not found in current or parent directory")
+                sys.exit(1)
+        
+        # Check if port already exists
+        port_name = f"{args.lang}-port"
+        existing_port = get_port_by_name(config, port_name)
+        if existing_port:
+            print(f"Error: Port '{port_name}' already exists in portal.yaml")
+            sys.exit(1)
+        
+        # Get version from upstream or use provided version
+        version = args.version or upstream_config.get('version') or upstream_config.get('branch', 'main')
+        
+        # Ensure upstream directory exists
+        upstream_dir = project_dir / "upstream"
+        if not upstream_dir.exists():
+            print(f"Cloning upstream {upstream_name}...")
+            clone_repo(normalize_repo_url(upstream_config['repo']), str(upstream_dir), version)
+        else:
+            # Update to specified version if provided
+            if args.version:
+                print(f"Updating upstream to version {version}...")
+                subprocess.run(["git", "-C", str(upstream_dir), "fetch"], check=False)
+                checkout_result = subprocess.run(
+                    ["git", "-C", str(upstream_dir), "checkout", version],
+                    capture_output=True,
+                    text=True
+                )
+                if checkout_result.returncode == 0:
+                    print(f"Successfully checked out version {version}")
+                    upstream_config['version'] = version
+        
+        # Create port directory
+        port_path = f"./{args.lang}-port"
+        port_dir = project_dir / port_path.lstrip('./')
+        port_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Created port directory: {port_dir}")
+        
+        # Create README in port directory
+        repo_parts = upstream_config['repo'].split('/')
+        repo_owner = repo_parts[-2] if len(repo_parts) >= 2 else "owner"
+        readme_content = f"""# {args.lang.title()} Port
+
+This directory contains the translated files for the {args.lang} port of {upstream_config['repo']}.
+
+## Structure
+
+- `upstream/` - Original repository
+- `{args.lang}-port/` - Translated files (this directory)
+"""
+        (port_dir / "README.md").write_text(readme_content)
+        
+        # Add new port to config
+        new_port = {
+            'name': port_name,
+            'repo': f'github.com/{repo_owner}/{args.lang}-port',
+            'path': port_path,
+            'lang': args.lang,
+            'origin': upstream_name,
+            'version': version
+        }
+        config['ports'].append(new_port)
+        save_portal_config(config, project_dir)
+        
+        # Create or update .cursorrules file if it doesn't exist
+        cursorrules_path = project_dir / ".cursorrules"
+        if not cursorrules_path.exists():
+            create_cursorrules(project_dir)
+        
+        print(f"\n✅ New port created successfully!")
+        print(f"   Port: {port_name}")
+        print(f"   Origin: {upstream_name}")
+        print(f"   Version: {version}")
+        print(f"   Port directory: {port_dir}")
+        
+    else:
+        # Original direct mode (requires both --upstream and --lang)
+        if not args.upstream:
+            print("Error: --upstream is required (or use --lang with existing portal.yaml)")
+            sys.exit(1)
+        
+        if not args.lang:
+            print("Error: --lang is required (or use --port with portal.yaml)")
+            sys.exit(1)
+        
+        create_portal_project(
+            args.upstream,
+            args.lang,
+            args.version,
+            args.project_name
+        )
+
+
+def cmd_version(args):
+    """Handle the 'version' subcommand"""
+    if not args.port:
+        print("Error: --port is required")
         sys.exit(1)
     
-    if not args.lang:
-        print("Error: --lang is required")
+    if not args.version:
+        print("Error: --version is required")
         sys.exit(1)
     
-    create_portal_project(
-        args.upstream,
-        args.lang,
-        args.version,
-        args.name
+    config = load_portal_config()
+    if not config:
+        print("Error: portal.yaml not found")
+        sys.exit(1)
+    
+    port_config = get_port_by_name(config, args.port)
+    if not port_config:
+        print(f"Error: Port '{args.port}' not found in portal.yaml")
+        sys.exit(1)
+    
+    origin_name = port_config.get('origin')
+    upstream_config = get_upstream_by_name(config, origin_name)
+    if not upstream_config:
+        print(f"Error: Upstream '{origin_name}' not found in portal.yaml")
+        sys.exit(1)
+    
+    project_dir = Path.cwd()
+    if not (project_dir / "portal.yaml").exists():
+        project_dir = project_dir.parent
+    
+    upstream_dir = project_dir / "upstream"
+    if not upstream_dir.exists():
+        print("Error: Upstream directory not found. Run 'portal open --port <name>' first.")
+        sys.exit(1)
+    
+    print(f"Updating {args.port} to version {args.version}...")
+    subprocess.run(["git", "-C", str(upstream_dir), "fetch"], check=False)
+    checkout_result = subprocess.run(
+        ["git", "-C", str(upstream_dir), "checkout", args.version],
+        capture_output=True,
+        text=True
     )
+    
+    if checkout_result.returncode != 0:
+        print(f"Error: Could not checkout version {args.version}: {checkout_result.stderr}")
+        sys.exit(1)
+    
+    # Update version in config - update upstreams section, not port's origin
+    port_config['version'] = args.version
+    upstream_config['version'] = args.version  # Update upstream version in upstreams section
+    save_portal_config(config, project_dir)
+    
+    print(f"✅ Successfully updated to version {args.version}")
+
+
+def cmd_list(args):
+    """Handle the 'list' subcommand"""
+    config = load_portal_config()
+    if not config:
+        print("Error: portal.yaml not found")
+        sys.exit(1)
+    
+    project_dir = Path.cwd()
+    if not (project_dir / "portal.yaml").exists():
+        project_dir = project_dir.parent
+    
+    # Sync upstream versions from git if upstream directory exists
+    upstream_dir = project_dir / "upstream"
+    if upstream_dir.exists():
+        for upstream in config.get('upstreams', []):
+            # Try to get current version from git
+            git_version = get_current_version(upstream_dir)
+            if git_version and git_version != upstream.get('version'):
+                # Update version in config if it changed
+                upstream['version'] = git_version
+                save_portal_config(config, project_dir)
+    
+    print("Upstreams:")
+    print("-" * 80)
+    if 'upstreams' in config:
+        for upstream in config['upstreams']:
+            version = upstream.get('version', 'N/A')
+            print(f"  {upstream['name']:30} {version:20} ({upstream.get('repo', 'N/A')})")
+    else:
+        print("  No upstreams configured")
+    
+    print("\nPorts:")
+    print("-" * 80)
+    
+    if 'ports' in config:
+        for port in config['ports']:
+            port_path = port.get('path', f"./{port.get('lang', 'unknown')}-port")
+            port_dir = project_dir / port_path.lstrip('./')
+            status = "✓" if port_dir.exists() else "✗"
+            
+            port_version = port.get('version', 'N/A')
+            origin_name = port.get('origin', 'N/A')
+            
+            print(f"{status} {port['name']:20} {port.get('lang', 'N/A'):10} {origin_name:20} v{port_version}")
+    
+    if not config.get('ports'):
+        print("  No ports configured")
+
+
+def cmd_tags(args):
+    """Handle the 'tags' subcommand"""
+    config = load_portal_config()
+    if not config:
+        print("Error: portal.yaml not found")
+        sys.exit(1)
+    
+    # Auto-detect upstream if not provided
+    if not args.upstream:
+        upstreams = config.get('upstreams', [])
+        if len(upstreams) == 0:
+            print("Error: No upstreams found in portal.yaml")
+            sys.exit(1)
+        elif len(upstreams) == 1:
+            # Only one upstream, use it automatically
+            args.upstream = upstreams[0]['name']
+            print(f"Auto-detected upstream: {args.upstream}")
+        else:
+            # Multiple upstreams, need to specify
+            print("Error: Multiple upstreams found in portal.yaml. Please specify with --upstream:")
+            for upstream in upstreams:
+                print(f"  - {upstream['name']}")
+            sys.exit(1)
+    
+    upstream_config = get_upstream_by_name(config, args.upstream)
+    if not upstream_config:
+        print(f"Error: Upstream '{args.upstream}' not found in portal.yaml")
+        print(f"Available upstreams:")
+        for upstream in config.get('upstreams', []):
+            print(f"  - {upstream['name']}")
+        sys.exit(1)
+    
+    project_dir = Path.cwd()
+    if not (project_dir / "portal.yaml").exists():
+        project_dir = project_dir.parent
+    
+    upstream_dir = project_dir / "upstream"
+    if not upstream_dir.exists():
+        print("Error: Upstream directory not found. Run 'portal open --port <name>' first.")
+        sys.exit(1)
+    
+    print(f"Fetching tags for {args.upstream}...")
+    subprocess.run(["git", "-C", str(upstream_dir), "fetch", "--tags"], check=False)
+    
+    result = subprocess.run(
+        ["git", "-C", str(upstream_dir), "tag", "-l", "--sort=-version:refname"],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        print(f"Error: Could not list tags: {result.stderr}")
+        sys.exit(1)
+    
+    tags = [tag.strip() for tag in result.stdout.strip().split('\n') if tag.strip()]
+    
+    if tags:
+        print(f"\nAvailable tags for {args.upstream}:")
+        print("-" * 60)
+        for tag in tags[:50]:  # Show first 50 tags
+            print(f"  {tag}")
+        if len(tags) > 50:
+            print(f"\n... and {len(tags) - 50} more tags")
+    else:
+        print(f"No tags found for {args.upstream}")
+
+
+def get_current_version(upstream_dir):
+    """Get the current checked out version/tag/branch"""
+    # Try to get tag first
+    result = subprocess.run(
+        ["git", "-C", str(upstream_dir), "describe", "--tags", "--exact-match"],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    
+    # Try branch
+    result = subprocess.run(
+        ["git", "-C", str(upstream_dir), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    
+    # Fallback to commit hash
+    result = subprocess.run(
+        ["git", "-C", str(upstream_dir), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()[:7]
+    
+    return None
+
+
+def get_latest_tags(upstream_dir, limit=10):
+    """Get the latest tags from upstream"""
+    result = subprocess.run(
+        ["git", "-C", str(upstream_dir), "tag", "-l", "--sort=-version:refname"],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        return []
+    
+    tags = [tag.strip() for tag in result.stdout.strip().split('\n') if tag.strip()]
+    return tags[:limit]
+
+
+def get_diff_summary(upstream_dir, from_version, to_version):
+    """Get a summary of changes between two versions"""
+    result = subprocess.run(
+        ["git", "-C", str(upstream_dir), "diff", "--stat", from_version, to_version],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        return None
+    
+    return result.stdout.strip()
+
+
+def get_diff_files(upstream_dir, from_version, to_version):
+    """Get list of changed files between two versions"""
+    result = subprocess.run(
+        ["git", "-C", str(upstream_dir), "diff", "--name-status", from_version, to_version],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        return []
+    
+    files = []
+    for line in result.stdout.strip().split('\n'):
+        if line.strip():
+            parts = line.split('\t')
+            if len(parts) >= 2:
+                files.append({
+                    'status': parts[0],
+                    'path': parts[1]
+                })
+    
+    return files
+
+
+def get_full_diff(upstream_dir, from_version, to_version):
+    """Get full diff between two versions"""
+    result = subprocess.run(
+        ["git", "-C", str(upstream_dir), "diff", from_version, to_version],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        return None
+    
+    return result.stdout
+
+
+def save_diff_to_file(project_dir, upstream_name, from_version, to_version, diff_content):
+    """Save diff to a file with an easy-to-identify name"""
+    # Create diffs directory if it doesn't exist
+    diffs_dir = project_dir / "diffs"
+    diffs_dir.mkdir(exist_ok=True)
+    
+    # Create filename: diff-{upstream}-{from_version}-to-{to_version}.patch
+    # Sanitize version strings for filename
+    safe_from = from_version.replace('/', '_').replace('\\', '_').replace(':', '_')
+    safe_to = to_version.replace('/', '_').replace('\\', '_').replace(':', '_')
+    filename = f"diff-{upstream_name}-{safe_from}-to-{safe_to}.patch"
+    diff_file = diffs_dir / filename
+    
+    # Write diff to file
+    with open(diff_file, 'w') as f:
+        f.write(f"# Diff from {from_version} to {to_version}\n")
+        f.write(f"# Upstream: {upstream_name}\n")
+        f.write(f"# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("#\n")
+        f.write(diff_content)
+    
+    return diff_file
+
+
+def cmd_watch(args):
+    """Handle the 'watch' subcommand"""
+    config = load_portal_config()
+    if not config:
+        print("Error: portal.yaml not found")
+        sys.exit(1)
+    
+    # Auto-detect upstream if not provided
+    if not args.upstream:
+        upstreams = config.get('upstreams', [])
+        if len(upstreams) == 0:
+            print("Error: No upstreams found in portal.yaml")
+            sys.exit(1)
+        elif len(upstreams) == 1:
+            # Only one upstream, use it automatically
+            args.upstream = upstreams[0]['name']
+            print(f"Auto-detected upstream: {args.upstream}")
+        else:
+            # Multiple upstreams, need to specify
+            print("Error: Multiple upstreams found in portal.yaml. Please specify with --upstream:")
+            for upstream in upstreams:
+                print(f"  - {upstream['name']}")
+            sys.exit(1)
+    
+    upstream_config = get_upstream_by_name(config, args.upstream)
+    if not upstream_config:
+        print(f"Error: Upstream '{args.upstream}' not found in portal.yaml")
+        print(f"Available upstreams:")
+        for upstream in config.get('upstreams', []):
+            print(f"  - {upstream['name']}")
+        sys.exit(1)
+    
+    project_dir = Path.cwd()
+    if not (project_dir / "portal.yaml").exists():
+        project_dir = project_dir.parent
+    
+    upstream_dir = project_dir / "upstream"
+    if not upstream_dir.exists():
+        print("Error: Upstream directory not found. Run 'portal open --port <name>' first.")
+        sys.exit(1)
+    
+    interval = args.interval or 3600  # Default 1 hour
+    seen_tags = set()
+    
+    # Initialize seen_tags with current stored version
+    stored_version = upstream_config.get('version')
+    if stored_version:
+        seen_tags.add(stored_version)
+    
+    print(f"Watching upstream: {args.upstream}")
+    if stored_version:
+        print(f"Current tracked version: {stored_version}")
+    print(f"Checking every {interval} seconds")
+    print("Press Ctrl+C to stop\n")
+    
+    try:
+        while True:
+            # Fetch latest changes (including all refs to get latest code)
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Fetching updates...")
+            subprocess.run(
+                ["git", "-C", str(upstream_dir), "fetch", "--all", "--tags", "--prune"],
+                capture_output=True,
+                check=False
+            )
+            
+            # Get current version from git and sync with config
+            git_version = get_current_version(upstream_dir)
+            # Use version from config if available, otherwise use git version
+            current_version = upstream_config.get('version') or git_version
+            if git_version and git_version != upstream_config.get('version'):
+                # Update version in config if it changed
+                upstream_config['version'] = git_version
+                current_version = git_version
+                save_portal_config(config, project_dir)
+            
+            if current_version:
+                print(f"Current version: {current_version}")
+            
+            # Get latest tags
+            latest_tags = get_latest_tags(upstream_dir, limit=20)
+            
+            if not latest_tags:
+                print("No tags found in upstream repository")
+            else:
+                # Find new tags
+                new_tags = []
+                for tag in latest_tags:
+                    if tag not in seen_tags:
+                        new_tags.append(tag)
+                        seen_tags.add(tag)
+                
+                if new_tags:
+                    # Get the latest (first) new tag
+                    latest_new_tag = new_tags[0]
+                    
+                    print(f"\n🔔 New tags detected: {', '.join(new_tags)}")
+                    print("=" * 80)
+                    
+                    # Store the version before checkout for diff calculation
+                    version_before_update = current_version or stored_version
+                    
+                    for new_tag in new_tags:
+                        print(f"\n📦 New Release: {new_tag}")
+                        print("-" * 80)
+                        
+                        # Show diff summary (using version before update)
+                        if version_before_update:
+                            print(f"\nChanges from {version_before_update} to {new_tag}:")
+                            diff_summary = get_diff_summary(upstream_dir, version_before_update, new_tag)
+                            if diff_summary:
+                                print(diff_summary)
+                            
+                            # Show changed files
+                            print(f"\nChanged files:")
+                            changed_files = get_diff_files(upstream_dir, version_before_update, new_tag)
+                            if changed_files:
+                                for file_info in changed_files[:30]:  # Show first 30 files
+                                    status = file_info['status']
+                                    path = file_info['path']
+                                    status_symbol = {
+                                        'A': '➕',
+                                        'M': '📝',
+                                        'D': '➖',
+                                        'R': '🔄'
+                                    }.get(status[0], '❓')
+                                    print(f"  {status_symbol} {status:3} {path}")
+                                
+                                if len(changed_files) > 30:
+                                    print(f"  ... and {len(changed_files) - 30} more files")
+                            
+                            # Get and save full diff to file (before checkout)
+                            print(f"\n💾 Saving full diff to file...")
+                            full_diff = get_full_diff(upstream_dir, version_before_update, new_tag)
+                            if full_diff:
+                                diff_file = save_diff_to_file(
+                                    project_dir, 
+                                    args.upstream, 
+                                    version_before_update, 
+                                    new_tag, 
+                                    full_diff
+                                )
+                                print(f"   Saved to: {diff_file.relative_to(project_dir)}")
+                            else:
+                                print("   Warning: Could not generate full diff")
+                            
+                            # Show detailed diff for important files (optional)
+                            if args.detailed and changed_files:
+                                print(f"\nDetailed changes (first 5 files):")
+                                for file_info in changed_files[:5]:
+                                    if file_info['status'][0] != 'D':  # Skip deleted files
+                                        path = file_info['path']
+                                        print(f"\n--- {path} ---")
+                                        diff_result = subprocess.run(
+                                            ["git", "-C", str(upstream_dir), "diff", 
+                                             version_before_update, new_tag, "--", path],
+                                            capture_output=True,
+                                            text=True
+                                        )
+                                        if diff_result.returncode == 0:
+                                            # Show first 50 lines of diff
+                                            diff_lines = diff_result.stdout.split('\n')[:50]
+                                            print('\n'.join(diff_lines))
+                                            if len(diff_result.stdout.split('\n')) > 50:
+                                                print("  ... (truncated)")
+                        else:
+                            print(f"Note: Current version unknown, showing latest tag info")
+                        
+                        print("-" * 80)
+                    
+                    # After showing all diffs, checkout the latest tag and update YAML
+                    print(f"\n⬇️  Updating upstream to latest release: {latest_new_tag}")
+                    checkout_result = subprocess.run(
+                        ["git", "-C", str(upstream_dir), "checkout", latest_new_tag],
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if checkout_result.returncode == 0:
+                        # Update upstream version in config
+                        upstream_config['version'] = latest_new_tag
+                        save_portal_config(config, project_dir)
+                        current_version = latest_new_tag
+                        print(f"✅ Upstream updated to {latest_new_tag}")
+                        print(f"✅ Updated portal.yaml with new version")
+                    else:
+                        print(f"⚠️  Warning: Could not checkout {latest_new_tag}: {checkout_result.stderr}")
+                    
+                    print("\n💡 To update a port to this version, run:")
+                    print(f"   portal version --port <port-name> --version {latest_new_tag}")
+                    print("=" * 80)
+                    
+                    # Update seen_tags with the latest tag we just checked out
+                    seen_tags.add(latest_new_tag)
+                else:
+                    print("No new tags detected")
+            
+            if not args.continuous:
+                break
+            
+            print(f"\nNext check in {interval} seconds...")
+            time.sleep(interval)
+            
+    except KeyboardInterrupt:
+        print("\n\nStopped watching.")
+        sys.exit(0)
 
 
 def main():
     parser = argparse.ArgumentParser(
         prog="portal",
-        description="A tool to set up portal projects for SDK translation",
+        description="A tool to set up portal projects for project translation",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
@@ -156,22 +1076,28 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  portal open --upstream github.com/user/sdk-repo --lang python
-  portal open --upstream https://github.com/user/sdk-repo.git --lang swift --version 0.5.0
-  portal open --upstream github.com/YannisDC/upstream-example --version 0.5.0 --lang swift
+  # Direct mode (creates new portal project):
+  portal open --upstream github.com/user/project-repo --lang python
+  portal open --upstream https://github.com/user/project-repo.git --lang swift --version 0.5.0
+  
+  # Config-based mode (uses portal.yaml):
+  portal open --port flutter-port --version 0.5.0
         """
     )
     
     open_parser.add_argument(
         "--upstream",
-        required=True,
-        help="Upstream repository URL or path (e.g., github.com/user/repo or https://github.com/user/repo.git)"
+        help="Upstream repository URL or path (e.g., github.com/user/repo or https://github.com/user/repo.git). Required for new projects, optional if portal.yaml exists."
     )
     
     open_parser.add_argument(
         "--lang",
-        required=True,
-        help="Target language for the port (e.g., python, rust, swift, go)"
+        help="Target language for the port (e.g., python, rust, swift, go). Use with --upstream for new projects, or alone to add a port to existing upstream."
+    )
+    
+    open_parser.add_argument(
+        "--port",
+        help="Port name from portal.yaml (e.g., flutter-port). Use this instead of --upstream and --lang."
     )
     
     open_parser.add_argument(
@@ -182,12 +1108,121 @@ Examples:
     open_parser.add_argument(
         "--name",
         dest="project_name",
-        help="Custom name for the project directory (default: portal-{repo-name})"
+        help="Custom name for the project directory (default: portal-{repo-name}). Only used with --upstream mode."
     )
     
     open_parser.set_defaults(func=cmd_open)
     
+    # 'version' subcommand
+    version_parser = subparsers.add_parser(
+        "version",
+        help="Update version for a port",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  portal version --port flutter-port --version 0.6.0
+        """
+    )
+    
+    version_parser.add_argument(
+        "--port",
+        required=True,
+        help="Port name from portal.yaml"
+    )
+    
+    version_parser.add_argument(
+        "--version",
+        required=True,
+        help="Version/tag/branch to checkout"
+    )
+    
+    version_parser.set_defaults(func=cmd_version)
+    
+    # 'list' subcommand
+    list_parser = subparsers.add_parser(
+        "list",
+        help="List opened portals",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  portal list
+        """
+    )
+    
+    list_parser.set_defaults(func=cmd_list)
+    
+    # 'tags' subcommand
+    tags_parser = subparsers.add_parser(
+        "tags",
+        help="List available version tags for an upstream",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  portal tags  # Auto-detect upstream if only one exists
+  portal tags --upstream upstream-foo
+        """
+    )
+    
+    tags_parser.add_argument(
+        "--upstream",
+        help="Upstream name from portal.yaml (optional if only one upstream exists)"
+    )
+    
+    tags_parser.set_defaults(func=cmd_tags)
+    
+    # 'watch' subcommand
+    watch_parser = subparsers.add_parser(
+        "watch",
+        help="Monitor upstream for new tags/releases and show changes",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  portal watch  # Auto-detect upstream if only one exists
+  portal watch --upstream upstream-foo
+  portal watch --upstream upstream-foo --interval 1800  # Check every 30 minutes
+  portal watch --upstream upstream-foo --detailed  # Show detailed diffs
+  portal watch --upstream upstream-foo --once  # Check once and exit
+        """
+    )
+    
+    watch_parser.add_argument(
+        "--upstream",
+        help="Upstream name from portal.yaml (optional if only one upstream exists)"
+    )
+    
+    watch_parser.add_argument(
+        "--interval",
+        type=int,
+        help="Check interval in seconds (default: 3600 = 1 hour)"
+    )
+    
+    watch_parser.add_argument(
+        "--continuous",
+        action="store_true",
+        default=True,
+        help="Continuously monitor (default: true). Use --once to check once and exit."
+    )
+    
+    watch_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Check once and exit (opposite of --continuous)"
+    )
+    
+    watch_parser.add_argument(
+        "--detailed",
+        action="store_true",
+        help="Show detailed diff for changed files (first 5 files)"
+    )
+    
+    watch_parser.set_defaults(func=cmd_watch)
+    
     args = parser.parse_args()
+    
+    # Handle --once flag
+    if hasattr(args, 'once') and args.once:
+        args.continuous = False
+    
     args.func(args)
 
 

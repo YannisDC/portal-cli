@@ -15,26 +15,35 @@ For local development and testing, use the install script:
 This will copy the script to Homebrew's bin directory.
 
 #### Option 2: Install via Homebrew Tap
-1. The tap has been created at: `yannisdecl/portal`
-2. For local testing with the tap:
-   ```bash
-   # Create a tarball first
-   cd /Users/yannisdecl/code/portal
-   tar czf portal-cli.tar.gz portal-cli
-   
-   # Update the sha256 in the formula, then:
-   brew install yannisdecl/portal/portal-cli
-   ```
+The tap has been created at: `yannisdecl/portal`
 
-3. For production (once on GitHub):
-   - Create a GitHub repository for your tap (e.g., `homebrew-portal`)
-   - Add the `portal-cli.rb` formula to `Formula/portal-cli.rb` in that repository
-   - Update the formula with the GitHub URL
-   - Install via tap:
-     ```bash
-     brew tap yourusername/portal
-     brew install portal-cli
-     ```
+```bash
+# Tap the repository
+brew tap yannisdecl/portal
+
+# Install portal-cli
+brew install yannisdecl/portal/portal-cli
+
+# Create portal symlink (optional, for convenience)
+ln -sf /opt/homebrew/bin/portal-cli /opt/homebrew/bin/portal
+
+# Install PyYAML for config-based commands (required for --port, list, tags, version)
+# On modern macOS with externally-managed Python, use:
+pip3 install --break-system-packages pyyaml
+# Or use --user flag:
+pip3 install --user pyyaml
+```
+
+**Note:** For config-based commands (`--port`, `list`, `tags`, `version`), you need to install PyYAML separately:
+```bash
+# For externally-managed Python environments (modern macOS):
+pip3 install --break-system-packages pyyaml
+
+# Or with --user flag:
+pip3 install --user pyyaml
+```
+
+Direct mode (using `--upstream` and `--lang`) works without PyYAML.
 
 ### Manual Installation
 
@@ -55,19 +64,19 @@ This will copy the script to Homebrew's bin directory.
 
 ## Usage
 
+### Direct Mode (Creates New Portal Project)
+
 ```bash
 portal open --upstream <repo-url> --lang <language> [--version <version>] [--name <custom-name>]
 ```
 
-### Arguments
-
-- `--upstream`: The upstream repository URL or path (e.g., `github.com/user/repo`, `https://github.com/user/repo.git`)
-- `--lang`: The target language for the port (e.g., `python`, `rust`, `swift`, `go`)
+**Arguments:**
+- `--upstream`: The upstream repository URL or path (e.g., `github.com/user/repo`, `https://github.com/user/repo.git`). Required for new projects.
+- `--lang`: The target language for the port (e.g., `python`, `rust`, `swift`, `go`). Can be used alone if portal.yaml exists.
 - `--version`: (Optional) Specific version/tag/branch to checkout
 - `--name`: (Optional) Custom name for the project directory. Defaults to `portal-{repo-name}`
 
-### Examples
-
+**Examples:**
 ```bash
 # Create a portal project for a Swift port
 portal open --upstream github.com/YannisDC/upstream-example --version 0.5.0 --lang swift
@@ -78,25 +87,119 @@ portal open --upstream github.com/user/sdk-repo --lang python
 # Create a portal project with a custom name
 portal open --upstream https://github.com/user/sdk-repo.git --lang rust --name my-custom-portal
 
-# Using full GitHub URL
-portal open --upstream https://github.com/user/sdk-repo.git --lang swift --version 0.5.0
+# Add a new port to existing upstream (if portal.yaml exists)
+portal open --lang dart  # Uses the existing upstream from portal.yaml
+```
+
+### Config-Based Mode (Uses portal.yaml)
+
+After creating a portal project, a `portal.yaml` configuration file is created. You can edit this file to define multiple upstreams and ports, then use these commands:
+
+**1. Open a portal (initial port from a version tag):**
+```bash
+portal open --port <port-name> --version <version>
+```
+
+**2. Update version manually (for testing):**
+```bash
+portal version --port <port-name> --version <version>
+```
+
+**3. List opened portals:**
+```bash
+portal list
+```
+
+**4. List available version tags:**
+```bash
+portal tags  # Auto-detects upstream if only one exists
+portal tags --upstream <upstream-name>  # Specify upstream if multiple exist
+```
+
+**5. Watch for upstream changes:**
+```bash
+portal watch  # Auto-detects upstream if only one exists
+portal watch --upstream <upstream-name>  # Specify upstream if multiple exist
+portal watch --upstream <upstream-name> --interval 1800  # Check every 30 minutes
+portal watch --upstream <upstream-name> --once  # Check once and exit
+portal watch --upstream <upstream-name> --detailed  # Show detailed file diffs
+```
+
+**Example workflow:**
+```bash
+# 1. Create initial portal project
+portal open --upstream github.com/user/sdk-repo --lang python
+
+# 2. Edit portal.yaml to add more ports/upstreams
+# 3. Open a specific port from config
+portal open --port python-sdk --version 0.5.0
+
+# 4. List all configured ports
+portal list
+
+# 5. See available tags
+portal tags --upstream upstream-foo
+
+# 6. Update to a new version
+portal version --port python-sdk --version 0.6.0
+
+# 7. Watch for new upstream releases
+portal watch --upstream upstream-foo
+# This will monitor for new tags and show you what changed
+# When a new release is detected, it shows:
+#   - Summary of changes (files added/modified/deleted)
+#   - List of changed files
+#   - Saves full diff to: diffs/diff-{upstream}-{from}-to-{to}.patch
+#   - Optionally detailed diffs for important files
 ```
 
 ## Project Structure
 
-After running `portal-cli`, you'll get a directory structure like this:
+After running `portal open`, you'll get a directory structure like this:
 
 ```
 portal-{repo-name}/
+├── .cursorrules       # AI assistant rules for port maintenance
+├── portal.yaml        # Configuration file for upstreams and ports
 ├── upstream/          # The cloned upstream repository
+├── diffs/             # Diff files saved by portal watch
+│   └── diff-{upstream}-{from}-to-{to}.patch
 └── {target-language}-port/  # Directory for translated files
     └── README.md
+```
+
+### portal.yaml Configuration
+
+The `portal.yaml` file defines your upstreams and ports:
+
+```yaml
+upstreams:
+  - name: upstream-foo
+    repo: github.com/owner/foo
+    branch: main
+    # Optional: subdirectory to monitor
+    # path: packages/core
+
+ports:
+  - name: flutter-port
+    repo: github.com/owner/flutter-port
+    path: ./packages/sdk
+    lang: flutter
+    origin: upstream-foo  # Port originates from this upstream
+  - name: python-port
+    repo: github.com/owner/python-port
+    path: ./packages/python-port
+    lang: python
+    origin: upstream-foo
 ```
 
 ## Requirements
 
 - Python 3.6+
 - Git (for cloning repositories)
+- PyYAML (for config-based commands): `pip install pyyaml`
+  - Note: Direct mode (using `--upstream` and `--lang`) works without PyYAML
+  - Config-based commands (`--port`, `list`, `tags`, `version`) require PyYAML
 
 ## Development
 

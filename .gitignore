@@ -23,3 +23,7 @@ Thumbs.db
 # Test directories created by portal-cli
 portal-*/
 
+# Diff files saved by portal watch
+diffs/
+*.patch
+
