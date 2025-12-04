@@ -17,13 +17,26 @@ portal open --upstream github.com/user/sdk-repo --lang python
 
 That's it! You now have a structured project with the original source and your port directory.
 
+**Next step:** Use your LLM-enabled IDE (like Cursor, GitHub Copilot, etc.) or CLI tool to translate the code from `upstream/` to your port directory.
+
+## How It Works
+
+`portal-cli` handles the **scaffolding and change tracking**—not the actual code conversion:
+
+1. **Scaffolding**: Creates the project structure with upstream source and port directories
+2. **Change Tracking**: Monitors upstream releases and shows what changed
+3. **You Convert**: Use your LLM tool (Cursor, Copilot, etc.) to translate the code
+
+This separation lets you use your preferred AI tools while `portal-cli` keeps everything organized and tracks upstream updates.
+
 ## Features
 
-- 🚀 **Quick Setup** - Create port projects in seconds
+- 🚀 **Quick Scaffolding** - Set up port project structure in seconds
 - 🔄 **Version Tracking** - Monitor upstream changes automatically
 - 📦 **Multi-Language Support** - Python, Rust, Swift, Go, Dart, and more
 - 📊 **Change Detection** - Get notified when upstream releases new versions
 - ⚙️ **Config-Based** - Manage multiple ports and upstreams with `portal.yaml`
+- 🤖 **LLM-Agnostic** - Works with any LLM tool (Cursor, Copilot, Claude, etc.)
 
 ## Installation
 
@@ -60,9 +73,11 @@ This creates:
 ```
 portal-repo/
 ├── upstream/          # Original source code
-├── python-port/       # Your translation
+├── python-port/       # Your translation (use your LLM tool here)
 └── portal.yaml        # Configuration
 ```
+
+**Then:** Open the project in your LLM-enabled IDE and translate files from `upstream/` to `python-port/` using your AI assistant.
 
 ### Advanced: Multiple Ports & Version Management
 
