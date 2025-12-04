@@ -4,9 +4,9 @@
 class PortalCli < Formula
   desc "CLI tool to set up portal projects for SDK translation"
   homepage "https://github.com/YannisDC/portal-cli"
-  url "https://github.com/YannisDC/portal-cli/archive/refs/heads/main.zip"
+  url "https://github.com/YannisDC/portal-cli/archive/refs/tags/0.1.0.tar.gz"
   version "0.1.0"
-  sha256 "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5" # Update this after creating a release: shasum -a 256 <archive>
+  sha256 "acd183d33a81a7eb6565f2ca3319d7f6b4e9fc7802574f0b30b04ba7eebdd1b0"
   
   depends_on "python@3"
 
