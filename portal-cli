@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""
+portal: A tool to set up portal projects for SDK translation
+"""
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+def normalize_repo_url(repo_url):
+    """Normalize repository URL to full git URL format"""
+    # If it's already a full URL, return as is
+    if repo_url.startswith(('http://', 'https://', 'git@', 'git://')):
+        return repo_url
+    
+    # Handle github.com/user/repo format
+    if repo_url.startswith('github.com/'):
+        return f"https://{repo_url}"
+    
+    # Handle user/repo format (assume GitHub)
+    if '/' in repo_url and not repo_url.startswith('http'):
+        return f"https://github.com/{repo_url}"
+    
+    # If it doesn't have .git extension and looks like a repo, add it
+    if not repo_url.endswith('.git') and '/' in repo_url:
+        if not repo_url.startswith('http'):
+            repo_url = f"https://github.com/{repo_url}"
+        return f"{repo_url}.git" if not repo_url.endswith('.git') else repo_url
+    
+    return repo_url
+
+
+def clone_repo(repo_url, target_dir, version=None):
+    """Clone a git repository to the target directory, optionally checking out a specific version"""
+    if os.path.exists(target_dir):
+        print(f"Error: Directory {target_dir} already exists")
+        sys.exit(1)
+    
+    print(f"Cloning {repo_url} to {target_dir}...")
+    result = subprocess.run(
+        ["git", "clone", repo_url, target_dir],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        print(f"Error cloning repository: {result.stderr}")
+        sys.exit(1)
+    
+    # Check out specific version if provided
+    if version:
+        print(f"Checking out version {version}...")
+        checkout_result = subprocess.run(
+            ["git", "-C", target_dir, "checkout", version],
+            capture_output=True,
+            text=True
+        )
+        
+        if checkout_result.returncode != 0:
+            print(f"Warning: Could not checkout version {version}: {checkout_result.stderr}")
+            print("Continuing with default branch...")
+        else:
+            print(f"Successfully checked out version {version}")
+    
+    print(f"Successfully cloned repository to {target_dir}")
+
+
+def create_portal_project(upstream_repo, target_language, version=None, project_name=None):
+    """Create a new portal project structure"""
+    # Normalize the repository URL
+    normalized_repo = normalize_repo_url(upstream_repo)
+    
+    # Extract repo name from URL if project_name not provided
+    if project_name is None:
+        # Extract name from git URL (handles various formats)
+        repo_name = normalized_repo.rstrip('/').split('/')[-1]
+        if repo_name.endswith('.git'):
+            repo_name = repo_name[:-4]
+        project_name = f"portal-{repo_name}"
+    
+    # Create main project directory
+    project_dir = Path(project_name)
+    if project_dir.exists():
+        print(f"Error: Project directory {project_dir} already exists")
+        sys.exit(1)
+    
+    project_dir.mkdir()
+    print(f"Created project directory: {project_dir}")
+    
+    # Create upstream directory and clone repo
+    upstream_dir = project_dir / "upstream"
+    clone_repo(normalized_repo, str(upstream_dir), version)
+    
+    # Create target language port directory
+    port_dir = project_dir / f"{target_language}-port"
+    port_dir.mkdir()
+    print(f"Created port directory: {port_dir}")
+    
+    # Create a README in the port directory
+    version_info = f" (version {version})" if version else ""
+    readme_content = f"""# {target_language.title()} Port
+
+This directory contains the translated files for the {target_language} port of {normalized_repo}{version_info}.
+
+## Structure
+
+- `upstream/` - Original repository{version_info}
+- `{target_language}-port/` - Translated files (this directory)
+"""
+    (port_dir / "README.md").write_text(readme_content)
+    
+    print(f"\n✅ Portal project created successfully!")
+    print(f"   Project directory: {project_dir.absolute()}")
+    print(f"   Upstream repo: {upstream_dir}")
+    print(f"   Port directory: {port_dir}")
+    if version:
+        print(f"   Version: {version}")
+
+
+def cmd_open(args):
+    """Handle the 'open' subcommand"""
+    if not args.upstream:
+        print("Error: --upstream is required")
+        sys.exit(1)
+    
+    if not args.lang:
+        print("Error: --lang is required")
+        sys.exit(1)
+    
+    create_portal_project(
+        args.upstream,
+        args.lang,
+        args.version,
+        args.name
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="portal",
+        description="A tool to set up portal projects for SDK translation",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    subparsers.required = True
+    
+    # 'open' subcommand
+    open_parser = subparsers.add_parser(
+        "open",
+        help="Open/create a new portal project",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  portal open --upstream github.com/user/sdk-repo --lang python
+  portal open --upstream https://github.com/user/sdk-repo.git --lang swift --version 0.5.0
+  portal open --upstream github.com/YannisDC/upstream-example --version 0.5.0 --lang swift
+        """
+    )
+    
+    open_parser.add_argument(
+        "--upstream",
+        required=True,
+        help="Upstream repository URL or path (e.g., github.com/user/repo or https://github.com/user/repo.git)"
+    )
+    
+    open_parser.add_argument(
+        "--lang",
+        required=True,
+        help="Target language for the port (e.g., python, rust, swift, go)"
+    )
+    
+    open_parser.add_argument(
+        "--version",
+        help="Specific version/tag/branch to checkout (optional)"
+    )
+    
+    open_parser.add_argument(
+        "--name",
+        dest="project_name",
+        help="Custom name for the project directory (default: portal-{repo-name})"
+    )
+    
+    open_parser.set_defaults(func=cmd_open)
+    
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
+
