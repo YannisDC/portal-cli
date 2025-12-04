@@ -18,13 +18,19 @@ This will copy the script to Homebrew's bin directory.
 The tap has been created at: `yannisdecl/portal`
 
 ```bash
-# Tap the repository
-brew tap yannisdecl/portal
+# 1. Create new tarball
+rm -f portal-cli.tar.gz
+tar czf portal-cli.tar.gz portal-cli
 
-# Install portal-cli
+# 2. Calculate SHA256 and update formula
+SHA256=$(shasum -a 256 portal-cli.tar.gz | awk '{print $1}')
+sed -i '' "s/sha256 \".*\"/sha256 \"$SHA256\"/" /opt/homebrew/Library/Taps/yannisdecl/homebrew-portal/Formula/portal-cli.rb
+
+# 3. Uninstall and reinstall
+brew uninstall portal-cli
 brew install yannisdecl/portal/portal-cli
 
-# Create portal symlink (optional, for convenience)
+# 4. Create symlink
 ln -sf /opt/homebrew/bin/portal-cli /opt/homebrew/bin/portal
 
 # Install PyYAML for config-based commands (required for --port, list, tags, version)
